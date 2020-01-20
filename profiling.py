@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
-from matplotlib.ticker import ScalarFormatter
+from matplotlib.ticker import ScalarFormatter, MultipleLocator
 from PIL import Image
 
 from models.enet import ENet
@@ -105,6 +105,8 @@ else:
             batch_size = [args.batch_size]
         means = []
         stds = []
+        percentile_90 = []
+        percentile_99 = []
         fps = []
         for bs in batch_size:
             print("Batch size: {}".format(bs))
@@ -123,36 +125,77 @@ else:
                 end = time.time()
                 latencies[i] = end - start
 
+            latencies.sort()
             mean_latency = np.mean(latencies) * 1000
             std_latency = np.std(latencies) * 1000
-            print("Latency Total: mean: {:.3f} ms, std: {:.3f} ms".format(mean_latency, std_latency))
-            print("Latency Avg:   mean: {:.3f} ms, std: {:.3f} ms".format(mean_latency/bs, std_latency/bs))
-            print("FPS Avg: mean: {:.2f}".format(1000/mean_latency*bs))
+            p90 = latencies[int(args.iter * 0.9 - 1)] * 1000
+            p99 = latencies[int(args.iter * 0.99 - 1)] * 1000
+            # print("Latency Total: mean: {:.3f} ms, std: {:.3f} ms".format(mean_latency, std_latency))
+            print("Latency: mean: {:.3f}ms ({:.2f} FPS), std: {:.3f}ms, P90: {:.3f}ms, P99: {:.3f}ms".format(
+                mean_latency/bs, 1000/mean_latency*bs, std_latency/bs, p90/bs, p99/bs))
             means.append(mean_latency/bs)
             stds.append(std_latency/bs)
             fps.append(1000/mean_latency*bs)
+            percentile_90.append(p90/bs)
+            percentile_99.append(p99/bs)
 
-    xlim_max = 2** (int(math.log2(args.batch_size)+1))
     fig = plt.figure(figsize=(16, 9))
     fig.suptitle("PyTorch-ENet Latency Test on Cityscapes Dataset", fontsize='xx-large', fontweight='bold')
     axs = fig.subplots(2, 1)
-    axs[0].errorbar(batch_size, means, stds)
-    # axs[0].set_xlabel('Batch Size'); 
-    axs[0].set_ylabel('Latency (ms)')
+    axs[0].errorbar(batch_size, means, stds, c='b')
+    axs[0].set_xlabel('Batch Size'); 
+    axs[0].set_ylabel('Latency (ms)', c='b')
+    axs[0].set_ylim(0, 30)
     axs[0].set_xscale('log', basex=2); axs[0].xaxis.set_major_formatter(ScalarFormatter()); axs[0].set_xticks(batch_size)
-    axs[0].set_title("Latency vs Batch Size")
+    # axs[0].set_title("Latency vs Batch Size")
     axs[0].grid(True)
+    axs[0].yaxis.set_major_locator(MultipleLocator(5))
+    axs[0].tick_params(axis='y', labelcolor='b')
     for x, y in zip(batch_size, means):
         axs[0].annotate('{:.1f}'.format(y), xy=(x, y))
 
-    axs[1].plot(batch_size, fps, c='r', marker='o')
-    axs[1].set_xlabel('Batch Size'); axs[1].set_ylabel('FPS')
-    axs[1].set_ylim(0, 200)
-    axs[1].set_xscale('log', basex=2); axs[1].xaxis.set_major_formatter(ScalarFormatter()); axs[1].set_xticks(batch_size)
-    axs[1].set_title("FPS vs Batch Size")
-    axs[1].grid(True)
+    ax_fps = axs[0].twinx()
+    ax_fps.plot(batch_size, fps, c='r', marker='o')
+    # ax_fps.set_xlabel('Batch Size')
+    ax_fps.set_ylabel('FPS', c='r')
+    ax_fps.set_ylim(0, 150)
+    ax_fps.yaxis.set_major_locator(MultipleLocator(30))
+    ax_fps.tick_params(axis='y', labelcolor='r')
+    # ax_fps.set_xscale('log', basex=2); ax_fps.xaxis.set_major_formatter(ScalarFormatter()); ax_fps.set_xticks(batch_size)
+    # ax_fps.grid(True)
     for x, y in zip(batch_size, fps):
-        axs[1].annotate('{:.1f}'.format(y), xy=(x, y))
+        ax_fps.annotate('{:.1f}'.format(y), xy=(x, y))
+    
+    labels = [str(bs) for bs in batch_size]
+    x = np.arange(len(labels))
+    print(labels, x)
+    width = 0.2
+    rects1 = axs[1].bar(x - width, means, width, label='mean')
+    rects2 = axs[1].bar(x,         percentile_90, width, label='P90')
+    rects3 = axs[1].bar(x + width, percentile_99, width, label='P99')
+    axs[1].set_ylabel('Latency (ms)')
+    axs[1].set_xlabel('Batch Size')
+    # axs[1].set_title("Latency across percentile")
+    # axs[1].set_xscale('log', basex=2); axs[0].xaxis.set_major_formatter(ScalarFormatter())
+    axs[1].set_xticks(x)
+    axs[1].set_xticklabels(labels)
+    axs[1].set_ylim(0, 20)
+    axs[1].legend()
+
+    def autolabel(rects):
+        """Attach a text label above each bar in *rects*, displaying its height."""
+        for rect in rects:
+            height = rect.get_height()
+            axs[1].annotate('{:.1f}'.format(height),
+                        xy=(rect.get_x() + rect.get_width() / 2, height),
+                        xytext=(0, 3),  # 3 points vertical offset
+                        textcoords="offset points",
+                        ha='center', va='bottom')
+
+    autolabel(rects1)
+    autolabel(rects2)
+    autolabel(rects3)
+    # fig.tight_layout()
     
     if args.plot:
         plt.show()
